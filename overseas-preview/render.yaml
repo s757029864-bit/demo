@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: storefront-overseas-preview
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: overseas-preview
+    buildCommand: npm run check && npm test
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
