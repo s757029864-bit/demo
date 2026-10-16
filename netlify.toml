@@ -1,0 +1,3 @@
+[build]
+  publish = "overseas-preview/public"
+  command = "node overseas-preview/scripts/check.mjs"
