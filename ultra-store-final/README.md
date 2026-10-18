@@ -1,3 +1,5 @@
+静态展示：https://s757029864-bit.github.io/demo/store-preview/
+
 # 奥特曼商城 · VPS部署包
 
 默认使用已选定的RackNerd 1GB VPS。请先阅读 [VPS部署说明](VPS部署说明.md)。compose.yaml、Caddyfile和.env.vps.example为本次配置；render.yaml仅为备用方案，不需要开通Render。
