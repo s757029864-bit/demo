@@ -1,0 +1,76 @@
+name: ultra-store
+services:
+  app:
+    build: .
+    image: ultra-store-app:local
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    pids_limit: 128
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "10000"
+      DATA_DIR: /var/lib/ultra
+      PUBLIC_ORIGIN: https://${SITE_HOST:?Set SITE_HOST in .env}
+      DEMO_PAYMENTS_ENABLED: "false"
+      TRUSTED_PROXY_IP: 172.30.85.2
+      ADMIN_USERNAME: "757029864"
+      ADMIN_REGISTRATION_HASH: ${ADMIN_REGISTRATION_HASH:-}
+      BACKUP_WEBDAV_URL: ${BACKUP_WEBDAV_URL:-}
+      BACKUP_WEBDAV_USERNAME: ${BACKUP_WEBDAV_USERNAME:-}
+      BACKUP_WEBDAV_PASSWORD: ${BACKUP_WEBDAV_PASSWORD:-}
+    volumes:
+      - ./runtime/data:/var/lib/ultra
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    networks:
+      store:
+        ipv4_address: 172.30.85.3
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:10000/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "3"
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    pids_limit: 64
+    environment:
+      SITE_HOST: ${SITE_HOST:?Set SITE_HOST in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      store:
+        ipv4_address: 172.30.85.2
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "3"
+networks:
+  store:
+    ipam:
+      config:
+        - subnet: 172.30.85.0/24
+volumes:
+  caddy_data:
+  caddy_config:

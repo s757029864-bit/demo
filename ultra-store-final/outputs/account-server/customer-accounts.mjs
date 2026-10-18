@@ -1,0 +1,22 @@
+import {randomBytes,createHash} from 'node:crypto';import {encodePassword,verify,passOK} from './auth-crypto.mjs';
+const hash=s=>createHash('sha256').update(s).digest('hex');
+export function createCustomers(db,{secure=false,log=()=>{}}={}){
+ db.exec(`CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY,username TEXT UNIQUE NOT NULL,password TEXT NOT NULL,recovery TEXT NOT NULL,created INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS customer_sessions(token TEXT PRIMARY KEY,customer_id INTEGER NOT NULL,expires INTEGER NOT NULL);`);const dummy=encodePassword(randomBytes(32).toString('hex'));
+ const fail=(message,status=400)=>{const e=Error(message);e.status=status;throw e};
+ function lookup(req){const token=req.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('customer_sid='))?.slice(13);if(!token)return null;return db.prepare('SELECT c.id,c.username FROM customer_sessions s JOIN customers c ON s.customer_id=c.id WHERE s.token=? AND s.expires>?').get(hash(token),Date.now())||null}
+ function cookie(req,res,token){const value=`customer_sid=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${token?2592000:0}${secure?'; Secure':''}`;const old=res.getHeader('Set-Cookie');res.setHeader('Set-Cookie',[...(old?(Array.isArray(old)?old:[old]):[]),value]);req.headers.cookie=(req.headers.cookie||'').split(';').filter(c=>!c.trim().startsWith('customer_sid=')).join(';')+(token?'; customer_sid='+token:'')}
+ function issue(req,res,id){const token=randomBytes(32).toString('hex');db.prepare('DELETE FROM customer_sessions WHERE expires<=?').run(Date.now());db.prepare('INSERT INTO customer_sessions VALUES(?,?,?)').run(hash(token),id,Date.now()+2592000000);cookie(req,res,token)}
+ function post(req,res,p,b,oldBuyer){let recoveryCode;const username=typeof b.username==='string'?b.username.trim().toLowerCase():'';
+ if(p==='/api/customer/logout'){const current=lookup(req);const token=req.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('customer_sid='))?.slice(13);if(token)db.prepare('DELETE FROM customer_sessions WHERE token=?').run(hash(token));cookie(req,res,'');return {ok:true}}
+ if(p==='/api/customer/password'){const current=lookup(req);if(!current)fail('请先登录买方账号',401);const row=db.prepare('SELECT * FROM customers WHERE id=?').get(current.id);if(!verify(String(b.oldPassword||''),row.password)||!passOK(b.password))fail('原密码错误，或新密码不足12位');db.prepare('UPDATE customers SET password=? WHERE id=?').run(encodePassword(b.password),row.id);db.prepare('DELETE FROM customer_sessions WHERE customer_id=?').run(row.id);cookie(req,res,'');log('customer:'+row.id,'customer.password_changed');return {ok:true}}
+ if(!/^[a-z0-9_-]{4,30}$/.test(username))fail('买方账号为4–30位字母、数字或下划线');
+ if(p==='/api/customer/recover'){if(!passOK(b.password)||typeof b.recoveryCode!=='string'||b.recoveryCode.length>128)fail('请填写恢复密钥和至少12位新密码');const row=db.prepare('SELECT * FROM customers WHERE username=?').get(username);if(!row||row.recovery!==hash(b.recoveryCode.trim()))fail('账号或恢复密钥不正确',403);recoveryCode=randomBytes(24).toString('base64url');db.prepare('UPDATE customers SET password=?,recovery=? WHERE id=?').run(encodePassword(b.password),hash(recoveryCode),row.id);db.prepare('DELETE FROM customer_sessions WHERE customer_id=?').run(row.id);issue(req,res,row.id);log('customer:'+row.id,'customer.recovered');return {ok:true,recoveryCode}}
+ if(!passOK(b.password))fail('密码至少12位，最多128位');let row;
+ if(p==='/api/customer/register'){if(db.prepare('SELECT 1 FROM customers WHERE username=?').get(username))fail('账号已存在，请登录或使用恢复密钥找回',409);recoveryCode=randomBytes(24).toString('base64url');const id=db.prepare('INSERT INTO customers(username,password,recovery,created) VALUES(?,?,?,?)').run(username,encodePassword(b.password),hash(recoveryCode),Date.now()).lastInsertRowid;row={id,username};log('customer:'+id,'customer.registered')}
+ else if(p==='/api/customer/login'){row=db.prepare('SELECT * FROM customers WHERE username=?').get(username);if(!verify(b.password,row?.password||dummy)||!row)fail('买方账号或密码不正确',401)}else fail('不存在的买方账户操作',404);
+ // A browser can attach its anonymous history only to the account it authenticates as.
+ if(oldBuyer.startsWith('anon:'))db.prepare('UPDATE retail_orders SET buyer=? WHERE buyer=?').run(hash('customer:'+row.id),oldBuyer.slice(5));issue(req,res,row.id);return {ok:true,...(recoveryCode?{recoveryCode}:{})};
+ }
+ return {lookup,post,identity:c=>hash('customer:'+c.id)};
+}

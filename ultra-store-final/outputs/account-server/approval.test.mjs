@@ -1,0 +1,45 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {createAccountServer,encodePassword} from './server.mjs';
+test('agent self-registration requires admin approval and trusted per-agent prices',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'approval-test-')),password='Approval-test-only-2026';
+ const server=createAccountServer({requireBuyerAccount:false,dataDir:dir,secure:false,bootstrap:{username:'reservedadmin',passwordHash:encodePassword(password)}});await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
+ const request=async(p,b,c='',csrf='')=>{const r=await fetch(origin+p,{method:b?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:c,'X-CSRF-Token':csrf},...(b?{body:JSON.stringify(b)}:{})});return {status:r.status,cookie:r.headers.get('set-cookie')?.split(';')[0],body:await r.json()}};
+ try{
+  const admin=await request('/api/register',{username:'reservedadmin',password}),ac=admin.cookie,am=(await request('/api/me',null,ac)).body;
+  assert.equal((await request('/api/agent-register',{username:'reservedadmin',password,name:'bad',contact:'test'})).status,400);
+  const a=await request('/api/agent-register',{username:'new_a',password,name:'代理甲',contact:'QQ test',approval:'approved',role:'admin',prices:{go:0,plus:0,pro:0}});assert.equal(a.status,201);const c=a.cookie,me=(await request('/api/me',null,c)).body;assert.equal(me.role,'agent');assert.equal(me.approval,'pending');
+  assert.equal((await request('/api/catalog',null,c)).status,403);assert.equal((await request('/api/procurements/create',{product:'go',quantity:1,expectedCents:0},c,me.csrf)).status,403);
+  const rows=(await request('/api/agents',null,ac)).body;assert.equal(rows.length,1);const id=rows[0].id;assert.equal(rows[0].prices.go,45);
+  assert.equal((await request('/api/agents/update',{id,approval:'approved'},c,me.csrf)).status,403);
+  assert.equal((await request('/api/agents/update',{id,approval:'approved',tier:'B',prices:{go:41,plus:110,pro:620}},ac,am.csrf)).status,200);assert.equal((await request('/api/me',null,c)).body.approval,'approved');
+  const fresh=(await request('/api/login',{username:'new_a',password})).cookie,newMe=(await request('/api/me',null,fresh)).body;assert.equal((await request('/api/catalog',null,fresh)).body.prices.go,41);
+  assert.equal((await request('/api/procurements/create',{product:'go',quantity:2,expectedCents:1,total_cents:1},fresh,newMe.csrf)).status,409);
+  await request('/api/warehouse/import',{cards:Array.from({length:6},(_,i)=>({product:'go',code:'DEMO-GO-INVALID-TEST-'+i}))},ac,am.csrf);
+  assert.equal((await request('/api/procurements/create',{product:'go',quantity:2,expectedCents:4100,total_cents:1},fresh,newMe.csrf)).status,201);
+  const order=(await request('/api/catalog',null,fresh)).body.orders[0];assert.equal(order.total_cents,8200);assert.equal(order.status,'pending_payment');assert.equal((await request('/api/procurements/paid',{id:order.id},fresh,newMe.csrf)).status,400);await request('/api/procurements/cancel',{id:order.id},fresh,newMe.csrf);assert.equal((await request('/api/catalog',null,fresh)).body.inventory.length,0);
+  const b=await request('/api/agent-register',{username:'new_b',password,name:'乙',contact:'QQ test'});const bs=(await request('/api/agents',null,ac)).body.find(x=>x.username==='new_b');await request('/api/agents/update',{id:bs.id,approval:'approved'},ac,am.csrf);const bc=(await request('/api/login',{username:'new_b',password})).cookie;assert.deepEqual((await request('/api/catalog',null,bc)).body.orders,[]);assert.equal((await request('/api/catalog',null,bc)).body.prices.go,45);
+  const cards=[{username:'new_a',product:'go',code:'DEMO-GO-PRIVATE-A',status:'available'},{username:'new_b',product:'plus',code:'DEMO-PLUS-PRIVATE-B',status:'available'}];
+  assert.equal((await request('/api/inventory/import',{cards},fresh,newMe.csrf)).status,403);
+  assert.equal((await request('/api/inventory/import',{cards},ac,am.csrf)).status,200);
+  assert.equal((await request('/api/inventory/import',{cards},ac,am.csrf)).status,200);
+  const ca=(await request('/api/catalog?user_id='+bs.id,null,fresh)).body;assert.equal(ca.tier,'B');assert.equal(ca.inventory.length,1);assert.equal(ca.inventory[0].code,'DEMO-GO-PRIVATE-A');
+  const bm=(await request('/api/me',null,bc)).body;assert.equal((await request('/api/procurements/paid',{id:order.id},bc,bm.csrf)).status,404);const cb=(await request('/api/catalog',null,bc)).body;assert.equal(cb.inventory.length,1);assert.equal(cb.inventory[0].code,'DEMO-PLUS-PRIVATE-B');
+  assert.equal((await request('/api/inventory/import',{cards:[{...cards[0],username:'new_b'}]},ac,am.csrf)).status,409);
+  assert.equal((await request('/api/inventory/import',{cards:[{...cards[0],status:'sold'}]},ac,am.csrf)).status,200);
+  assert.equal((await request('/api/inventory/import',{cards:[cards[0]]},ac,am.csrf)).status,409);
+  assert.equal((await request('/api/agents/update',{id,tier:'C'},ac,am.csrf)).status,200);
+  const changed=(await request('/api/login',{username:'new_a',password})).cookie;assert.equal((await request('/api/catalog',null,changed)).body.tier,'C');
+  const cm=(await request('/api/me',null,changed)).body;
+  const purchase=await request('/api/procurements/create',{product:'go',quantity:2,expectedCents:4100},changed,cm.csrf);
+  assert.equal((await request('/api/procurements/simulate',{id:purchase.body.id},changed,cm.csrf)).status,400);
+  assert.equal((await request('/api/procurements/simulate',{id:purchase.body.id,simulate:true},bc,bm.csrf)).status,404);
+  const paid=await Promise.all([request('/api/procurements/simulate',{id:purchase.body.id,simulate:true},changed,cm.csrf),request('/api/procurements/simulate',{id:purchase.body.id,simulate:true},changed,cm.csrf)]);
+  assert.equal(paid[0].body.status,'demo_fulfilled');assert.equal(paid[0].body.codes.length,2);assert.deepEqual(paid[0].body.codes,paid[1].body.codes);assert.ok(paid[0].body.codes.every(c=>c.startsWith('DEMO-GO-INVALID-')));
+  const fulfilled=(await request('/api/catalog',null,changed)).body;assert.equal(fulfilled.inventory.length,3);assert.equal(fulfilled.inventory.filter(c=>c.procurement_id===purchase.body.id).length,2);assert.equal((await request('/api/catalog',null,bc)).body.inventory.length,1);
+  await request('/api/agents/update',{id,approval:'rejected'},ac,am.csrf);const rejected=(await request('/api/login',{username:'new_a',password})).cookie;assert.equal((await request('/api/catalog',null,rejected)).status,403);
+ }finally{await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true})}
+});

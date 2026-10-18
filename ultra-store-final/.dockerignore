@@ -1,0 +1,6 @@
+**/data
+**/backups
+**/.env*
+**/bootstrap.json
+**/.service-key
+.git

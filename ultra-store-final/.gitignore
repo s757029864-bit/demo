@@ -1,0 +1,7 @@
+**/data/
+**/backups/
+**/bootstrap.json
+.env
+**/.service-key
+runtime/
+migration-private/

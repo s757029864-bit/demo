@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: ultra-store-757029864
+    runtime: docker
+    region: singapore
+    plan: 0.5c-512mb
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    disk:
+      name: ultra-data
+      mountPath: /var/lib/ultra
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/lib/ultra
+      - key: DEMO_PAYMENTS_ENABLED
+        value: "false"
+      - key: ADMIN_USERNAME
+        value: "757029864"
+      - key: ADMIN_REGISTRATION_HASH
+        sync: false
