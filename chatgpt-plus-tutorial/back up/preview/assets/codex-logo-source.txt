@@ -1,0 +1,3 @@
+Official OpenAI Codex VS Code extension icon
+https://marketplace.visualstudio.com/items?itemName=openai.chatgpt
+https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.51111.21308/1794532255365/Microsoft.VisualStudio.Services.Icons.Default
